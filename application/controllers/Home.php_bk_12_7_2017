@@ -1,0 +1,374 @@
+<?php
+
+defined('BASEPATH') OR exit('No direct script access allowed');
+
+class Home extends CI_Controller {
+
+    public function __construct() {
+        parent::__construct();
+        #Load Model
+        $this->load->model(array('crawlmodel', 'trackermodel', 'mastermodel', 'batchlogs'));
+    }
+
+    public function index() {
+        isUserLogin(TRUE);
+        $data['vendors'] = $this->mastermodel->getAllVendor();
+        $data['regions'] = $this->mastermodel->getAllRegion();
+        $data['markets'] = $this->mastermodel->getAllMarket();
+
+        $data['title'] = 'upload POs';
+        $data['menu_id'] = 'opupload';
+        $data['page_heading'] = 'upload POs';
+        $data['view_file'] = 'home/file_upload';
+        if ($this->session->flashdata('formdata')) {
+            $formdata = $this->session->flashdata('formdata');
+            if (isset($formdata['upload'])) {
+                $data['batch_id'] = $formdata['batch_id'];
+                $data['fileUploadData'] = $this->batchlogs->getFileUploadStatusCount($data['batch_id']);
+                $data['fileUploadStatus'] = $this->batchlogs->getFileUploadStatus();
+            }
+        }
+        view($data);
+    }
+
+    public function handel_upload() {
+        if (isUserLogin()) {
+            $config['upload_path'] = UPLOAD;
+            $config['allowed_types'] = 'pdf';
+            $config['overwrite'] = FALSE;
+            $config['file_ext_tolower'] = TRUE;
+            $config['encrypt_name'] = TRUE;
+            $config['remove_spaces'] = TRUE;
+            $config['detect_mime'] = TRUE;
+            $config['mod_mime_fix'] = TRUE;
+            $config['max_size'] = 5120;
+            $this->load->library('upload');
+            $this->upload->initialize($config);
+            if ($_POST['submit']) {
+                $this->load->library('form_validation');
+                $this->form_validation->set_rules('region', 'Region', 'trim|xss_clean|required|is_natural_no_zero');
+                $this->form_validation->set_rules('customer', 'Customer', 'trim|xss_clean|required|is_natural_no_zero');
+                $this->form_validation->set_rules('market', 'Market', 'trim|xss_clean|required|is_natural_no_zero');
+                if ($this->form_validation->run() == TRUE) {
+                    $region = $formdata['region'] = $this->input->post('region');
+                    $customer = $formdata['customer'] = $this->input->post('customer');
+                    $market = $formdata['market'] = $this->input->post('market');
+                    $formdata['batch_id'] = 0;
+                    $this->session->set_flashdata('formdata', $formdata);
+                    if (isset($_FILES['attachment']) && !empty($_FILES['attachment']['name'])) {
+                        include APPPATH . 'third_party/PdfToText/PdfToText.phpclass';
+                        $filesCount = count($_FILES['attachment']['name']);
+                        $fileUploadStatus = $this->batchlogs->getFileUploadStatus();
+                        for ($i = 0; $i < $filesCount; $i++) {
+                            $pdf_name = $_FILES['attachment']['name'][$i];
+                            $fileExist = $this->crawlmodel->checkFileNameExists($pdf_name);
+                            if ($fileExist) {
+                                //add duplicate file
+                                if ($formdata['batch_id'] == 0) {
+                                    //insert upload log
+                                    $formdata['upload'] = TRUE;
+                                    $formdata['batch_id'] = $this->batchlogs->addUploadLog();
+                                    $this->session->set_flashdata('formdata', $formdata);
+                                }
+                                //insert file name by upload log
+                                $this->batchlogs->addFileUploadMap($formdata['batch_id'], $pdf_name, $fileUploadStatus['duplicate']);
+                                continue;
+                            }
+                            $_FILES['userFile']['name'] = $_FILES['attachment']['name'][$i];
+                            $_FILES['userFile']['type'] = $_FILES['attachment']['type'][$i];
+                            $_FILES['userFile']['tmp_name'] = $_FILES['attachment']['tmp_name'][$i];
+                            $_FILES['userFile']['error'] = $_FILES['attachment']['error'][$i];
+                            $_FILES['userFile']['size'] = $_FILES['attachment']['size'][$i];
+
+                            if (!$this->upload->do_upload('userFile')) {
+                                //add error file                                
+                                if ($formdata['batch_id'] == 0) {
+                                    //insert upload log
+                                    $formdata['upload'] = TRUE;
+                                    $formdata['batch_id'] = $this->batchlogs->addUploadLog();
+                                    $this->session->set_flashdata('formdata', $formdata);
+                                }
+                                //insert file name by upload log
+                                $this->batchlogs->addFileUploadMap($formdata['batch_id'], $pdf_name, $fileUploadStatus['error']);
+                                continue;
+                                //$this->session->set_flashdata('error_message', $this->upload->display_errors());                               
+                            } else {
+                                $upFile = $this->upload->data();
+                                $file_name = $upFile['file_name'];
+
+                                //insert crawl log with status pending
+                                $crawId = $this->crawlmodel->addCrawlLog($file_name, $pdf_name, '', $customer, 2);
+                                if ($crawId) {
+                                    $pdf = new PdfToText(NULL, PdfToText::PDFOPT_BASIC_LAYOUT);
+                                    $pdf->BlockSeparator = "@@";
+                                    $pdf->load($upFile['full_path']);
+                                    $lines = explode("\n", $pdf->Text);
+                                    $foundrow = FALSE;
+                                    $ponumber = $POdate = $codate = '';
+                                    $uploadOk = TRUE;
+                                    $rev = 0;
+                                    $isrev = FALSE;
+                                    $orders = array();
+                                    $orderkey = 0;
+                                    $orderDetails = array();
+                                    foreach ($lines as $linekey => $line) {
+                                        if (preg_match('/P.O.  NUMBER/', $line)) {
+                                            $temp = explode($pdf->BlockSeparator, $line);
+                                            $found = FALSE;
+                                            foreach ($temp as $value) {
+                                                if ($found) {
+                                                    $found = FALSE;
+                                                    $temp2 = explode('/', trim($value));
+                                                    $ponumber = isset($temp2[0]) ? trim($temp2[0]) : '';
+                                                    $rev = isset($temp2[1]) ? trim($temp2[1]) : 0;
+                                                    break;
+                                                }
+                                                if (strtoupper(trim($value)) == 'P.O.  NUMBER') {
+                                                    $found = TRUE;
+                                                }
+                                            }
+                                            //check po no and revision and vendor
+                                            $orderDetails = $this->trackermodel->getOrderDetils($customer, $ponumber);
+                                            if ($orderDetails) {
+                                                //check rev
+                                                if ($orderDetails['revision'] > $rev) {
+                                                    //add duplicate file                                                    
+                                                    if ($formdata['batch_id'] == 0) {
+                                                        //insert upload log
+                                                        $formdata['upload'] = TRUE;
+                                                        $formdata['batch_id'] = $this->batchlogs->addUploadLog();
+                                                        $this->session->set_flashdata('formdata', $formdata);
+                                                    }
+                                                    //insert file name by upload log
+                                                    $this->batchlogs->addFileUploadMap($formdata['batch_id'], $pdf_name, $fileUploadStatus['duplicate']);
+                                                    //$this->session->set_flashdata('error_message', 'an upper or same revision already added in server');
+                                                    $uploadOk = FALSE;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        if (preg_match('/P.O. DATE/', $line)) {
+                                            $temp = explode($pdf->BlockSeparator, $line);
+                                            $found = FALSE;
+                                            foreach ($temp as $value) {
+                                                if ($found) {
+                                                    $found = FALSE;
+                                                    $POdate = date("Y-m-d", strtotime(trim($value)));
+                                                    break;
+                                                }
+                                                if (strtoupper(trim($value)) == 'P.O. DATE') {
+                                                    $found = TRUE;
+                                                }
+                                            }
+                                        }
+                                        if (preg_match('/C.O. DATE/', $line)) {
+                                            $temp = explode($pdf->BlockSeparator, $line);
+                                            $found = FALSE;
+                                            foreach ($temp as $value) {
+                                                if ($found) {
+                                                    $found = FALSE;
+                                                    $codate = trim($value);
+                                                    break;
+                                                }
+                                                if (strtoupper(trim($value)) == 'C.O. DATE') {
+                                                    $found = TRUE;
+                                                }
+                                            }
+                                        }
+
+                                        if ($foundrow == TRUE && preg_match('/TOTAL:/', $line)) {
+                                            $foundrow = FALSE;
+                                        }
+                                        if ($foundrow == TRUE) {
+                                            $temp = explode($pdf->BlockSeparator, $line);
+                                            if (count($temp) == 1 || count($temp) == 2) {
+                                                //add description
+                                                if (!isset($orders[$orderkey]['description'])) {
+                                                    $orders[$orderkey]['description'] = '';
+                                                }
+                                                $orders[$orderkey]['description'] .= $temp[0];
+                                                if (isset($temp[1])) {
+                                                    $orders[$orderkey]['description'] .= ' ' . $temp[1];
+                                                }
+                                            } elseif ($isrev && count($temp) == 5) {
+                                                $orderkey++;
+                                                $orders[$orderkey]['line'] = intval(trim($temp[0]));
+                                                $orders[$orderkey]['qty'] = trim($temp[1]);
+                                                $orders[$orderkey]['state_name'] = trim($temp[2]);
+                                                $orders[$orderkey]['unite_price'] = trim(str_replace(['$', ','], '', $temp[3]));
+                                                $orders[$orderkey]['amount'] = trim(str_replace(['$', ','], '', $temp[4]));
+                                                //add rev row
+                                            } elseif (!$isrev && count($temp) == 6) {
+                                                $orderkey++;
+                                                if (!isset($orders[$orderkey]['description'])) {
+                                                    $orders[$orderkey]['description'] = '';
+                                                }
+                                                //add non rev row
+                                                $orders[$orderkey]['line'] = intval(trim($temp[0]));
+                                                $orders[$orderkey]['qty'] = trim($temp[1]);
+                                                $orders[$orderkey]['state_name'] = trim($temp[2]);
+                                                $orders[$orderkey]['description'] .= trim($temp[3]);
+                                                $orders[$orderkey]['unite_price'] = trim(str_replace(['$', ','], '', $temp[4]));
+                                                $orders[$orderkey]['amount'] = trim(str_replace(['$', ','], '', $temp[5]));
+                                            } elseif (!$isrev && count($temp) == 5) {
+                                                $orderkey++;
+                                                if (!isset($orders[$orderkey]['description'])) {
+                                                    $orders[$orderkey]['description'] = '';
+                                                }
+                                                //add non rev row
+                                                $orders[$orderkey]['line'] = intval(trim($temp[0]));
+                                                $orders[$orderkey]['qty'] = trim($temp[1]);
+                                                $orders[$orderkey]['state_name'] = trim($temp[2]);
+                                                $orders[$orderkey]['description'] .= '';
+                                                $orders[$orderkey]['unite_price'] = trim(str_replace(['$', ','], '', $temp[3]));
+                                                $orders[$orderkey]['amount'] = trim(str_replace(['$', ','], '', $temp[4]));
+                                            } else {
+                                                //some error                                                
+                                                if ($formdata['batch_id'] == 0) {
+                                                    //insert upload log
+                                                    $formdata['upload'] = TRUE;
+                                                    $formdata['batch_id'] = $this->batchlogs->addUploadLog();
+                                                    $this->session->set_flashdata('formdata', $formdata);
+                                                }
+                                                //insert file name by upload log
+                                                $this->batchlogs->addFileUploadMap($formdata['batch_id'], $pdf_name, $fileUploadStatus['error']);
+                                                //$this->session->set_flashdata('error_message', 'error in  pdf file');
+                                                $uploadOk = FALSE;
+                                                break;
+                                            }
+                                        }
+                                        if ($foundrow == FALSE && preg_match('/LINE@@QTY@@SITE NUMBER@@UNIT PRICE@@AMOUNT/', $line)) {
+                                            $foundrow = TRUE;
+                                            $isrev = TRUE;
+                                        }
+                                        if ($foundrow == FALSE && preg_match('/LINE@@QTY@@SITE NUMBER@@DESCRIPTION@@UNIT PRICE@@AMOUNT/', $line)) {
+                                            $foundrow = TRUE;
+                                            $isrev = FALSE;
+                                        }
+                                    }
+                                    if ($uploadOk) {
+                                        //check ponumber and order exist
+                                        if (!empty($ponumber) && !empty($orders)) {
+                                            if ($orderDetails) {
+                                                //update in tracker and order
+                                                $this->trackermodel->updateOrder($orderDetails['order_id'], $rev, $file_name, $pdf_name);
+                                                foreach ($orders as $order) {
+                                                    $this->trackermodel->addTracker($region, $market, $customer, $ponumber, $order['line'], $POdate, $order['state_name'], $order['description'], $order['unite_price'], $order['amount'], $order['qty'], $rev);
+                                                }
+                                            } else {
+                                                //insert in tracker and order
+                                                $this->trackermodel->addOder($ponumber, $rev, $file_name, $pdf_name, $customer);
+                                                foreach ($orders as $order) {
+                                                    $this->trackermodel->addTracker($region, $market, $customer, $ponumber, $order['line'], $POdate, $order['state_name'], $order['description'], $order['unite_price'], $order['amount'], $order['qty'], $rev);
+                                                }
+                                            }
+                                            //make crawl log success rev and po no                                            
+                                            if ($formdata['batch_id'] == 0) {
+                                                //insert upload log
+                                                $formdata['upload'] = TRUE;
+                                                $formdata['batch_id'] = $this->batchlogs->addUploadLog();
+                                                $this->session->set_flashdata('formdata', $formdata);
+                                            }
+                                            //insert file name by upload log
+                                            $this->batchlogs->addFileUploadMap($formdata['batch_id'], $pdf_name, $fileUploadStatus['uploaded']);
+                                            //$this->session->set_flashdata('success_message', 'upload complete.');
+                                            $fileExist = $this->crawlmodel->updatelog($crawId, 3, $ponumber, $rev);
+                                            continue;
+                                        } else {
+                                            //add error log
+                                            if ($formdata['batch_id'] == 0) {
+                                                //insert upload log
+                                                $formdata['upload'] = TRUE;
+                                                $formdata['batch_id'] = $this->batchlogs->addUploadLog();
+                                                $this->session->set_flashdata('formdata', $formdata);
+                                            }
+                                            //insert file name by upload log
+                                            $this->batchlogs->addFileUploadMap($formdata['batch_id'], $pdf_name, $fileUploadStatus['error']);
+                                            //$this->session->set_flashdata('error_message', 'error in  pdf file');
+                                            continue;
+                                        }
+                                    }
+                                } else {
+                                    //add error log
+                                    if ($formdata['batch_id'] == 0) {
+                                        //insert upload log
+                                        $formdata['upload'] = TRUE;
+                                        $formdata['batch_id'] = $this->batchlogs->addUploadLog();
+                                        $this->session->set_flashdata('formdata', $formdata);
+                                    }
+                                    //insert file name by upload log
+                                    $this->batchlogs->addFileUploadMap($formdata['batch_id'], $pdf_name, $fileUploadStatus['error']);
+                                    continue;
+                                }
+                            }
+                        }
+                        $this->session->set_flashdata('success_message', 'upload complete.');
+                        redirect('home');
+                    } else {
+                        $this->session->set_flashdata('error_message', 'Please upload a pdf file');
+                        redirect('home');
+                    }
+                } else {
+                    $this->session->set_flashdata('error_message', validation_errors());
+                    redirect('home');
+                }
+            } else {
+                $this->session->set_flashdata('error_message', 'Error ocure when upload your data!');
+                redirect('home');
+            }
+        } else {
+            redirect('home');
+        }
+    }
+
+    public function download_report($upload_id = 0) {
+        if (isUserLogin()) {
+            $uploadId = xss_clean($upload_id);
+            $this->load->library('excelphp');
+            $fileUploadData = $this->batchlogs->getFileUploadMap($uploadId);
+            if ($fileUploadData) {
+                $fileUploadStatus = $this->batchlogs->getFileUploadStatus();
+                $ploadStatus = array_flip($fileUploadStatus);
+                $row = 1;
+                $this->excelphp->setActiveSheetIndex(0);
+                $this->excelphp->getActiveSheet()->setTitle('File Uplaod Report');
+                $this->excelphp->getActiveSheet()
+                        ->getStyle('A' . $row . ':H' . $row)
+                        ->getFill()
+                        ->setFillType(PHPExcel_Style_Fill::FILL_SOLID)
+                        ->getStartColor()
+                        ->setARGB('#FFFF00');
+                $this->excelphp->getActiveSheet()->setCellValue('A' . $row, 'File Name');
+                $this->excelphp->getActiveSheet()->getStyle('A' . $row)->getFont()->setSize(14);
+                $this->excelphp->getActiveSheet()->getStyle('A' . $row)->getFont()->setBold(true);
+                $this->excelphp->getActiveSheet()->mergeCells('A' . $row . ':D' . $row);
+
+                $this->excelphp->getActiveSheet()->setCellValue('E' . $row, 'Status');
+                $this->excelphp->getActiveSheet()->getStyle('E' . $row)->getFont()->setSize(14);
+                $this->excelphp->getActiveSheet()->getStyle('E' . $row)->getFont()->setBold(true);
+                $this->excelphp->getActiveSheet()->mergeCells('E' . $row . ':H' . $row);
+                $row++;
+                foreach ($fileUploadData as $value) {
+                    $this->excelphp->getActiveSheet()->setCellValue('A' . $row, $value['file_name']);
+                    $this->excelphp->getActiveSheet()->mergeCells('A' . $row . ':D' . $row);
+                    $this->excelphp->getActiveSheet()->setCellValue('E' . $row, $ploadStatus[$value['status']]);
+                    $this->excelphp->getActiveSheet()->mergeCells('E' . $row . ':H' . $row);
+                    $row++;
+                }
+
+                $filename = 'file_upload_report' . time() . '.xls'; //save our workbook as this file name
+                header('Content-Type: application/vnd.ms-excel'); //mime type
+                header('Content-Disposition: attachment;filename="' . $filename . '"'); //tell browser what's the file name
+                header('Cache-Control: max-age=0');
+                $objWriter = PHPExcel_IOFactory::createWriter($this->excelphp, 'Excel5');
+
+                $objWriter->save('php://output');
+            } else {
+                show_404();
+            }
+        } else {
+            redirect('home');
+        }
+    }
+
+}

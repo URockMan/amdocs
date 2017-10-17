@@ -1,0 +1,6 @@
+<html><font face="Arial" color="#333300"><br>
+            <img src="data:image/png;base64,aHR0cHM6Ly91cGxvYWQud2lraW1lZGlhLm9yZy93aWtpcGVkaWEvY29tbW9ucy90aHVtYi8yLzJh
+L0hvbmV5d2VsbF9sb2dvLnN2Zy8yMDAwcHgtSG9uZXl3ZWxsX2xvZ28uc3ZnLnBuZw==
+" alt="Flight track image">
+            <br>
+        <table border="0"><tr><td align="left"><b>Tail Number  </b></td><td align="left">VV378</td></tr><tr><td align="left"><b>Status</b></td><td align="left">Taxi</td></tr><tr><td align="left"><b>Departure Airport</b></td><td align="left">OAKB - KABUL INTL          </td></tr><tr><td align="left"><b>ETD</b></td><td align="left">Unknown</td></tr><tr><td align="left"><b>Arrival Airport</b></td><td align="left">EINN - SHANNON             </td></tr><tr><td align="left"><b>ETA</b></td><td align="left">19-Sep-2017 11:00 UTC</td></tr><tr><td align="left">&nbsp;</td><td align="left">19-Sep-2017 12:00 (12:00 PM) Local</td></tr><tr><td align="left"><b>Altitude</b></td><td align="left">On Ground</td></tr><tr><td align="left"><b>Fuel on board</b></td><td align="left">35000 lbs</td></tr><tr><td align="left"><b>Reported Time</b></td><td align="left">19-Sep-2017 02:25 UTC</td></tr></table></font></html>

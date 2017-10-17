@@ -1,0 +1,382 @@
+<?php
+
+defined('BASEPATH') OR exit('No direct script access allowed');
+
+/*
+ *
+ */
+
+class Trackermodel extends CI_Model {
+
+    protected $trackerStatus = array('open' => 1, 'riv' => 5, 'invoiced' => 4, 'cancelled' => 3,'revised' => 0);
+    //table
+    protected $orderTable = 'order_log';
+    protected $trackerTable = 'tracker';
+    protected $regionTable = 'region';
+    protected $marketTable = 'market';
+    protected $vendorTable = 'vendor';
+    protected $trackerErrorTable = 'tracker_error';
+
+    public function __construct() {
+        parent::__construct();
+    }
+
+    public function getTrackerStatus() {
+        return $this->trackerStatus;
+    }
+
+    function addOder($po_number = '', $revision = 0, $file_name = '', $pdf_name = '', $vendor = '') {
+        $this->db->set('po_number', $po_number);
+        $this->db->set('revision', $revision);
+        $this->db->set('file_name', $file_name);
+        $this->db->set('pdf_name', $pdf_name);
+        $this->db->set('vendor', $vendor);
+        $this->db->insert($this->orderTable);
+        $error = $this->db->error();
+        if ($error['code'] == 0) {
+            return $this->db->insert_id();
+        } else {
+            return 0;
+        }
+    }
+
+    public function updateOrder($order_id = 0, $revision = 0, $file_name = NULL, $pdf_name = NULL) {
+        $this->db->set('revision', $revision);
+        if ($file_name != NULL) {
+            $this->db->set('file_name', $file_name);
+        }
+        if ($pdf_name != NULL) {
+            $this->db->set('pdf_name ', $pdf_name);
+        }
+        $this->db->where('order_id', $order_id);
+        $this->db->update($this->orderTable);
+        return $this->db->affected_rows();
+    }
+	
+	public function getTrackerLastRev($vendor = NULL, $po_number = NULL) {
+        $query = $this->db->select('max(rev) as max_rev')
+                ->from($this->trackerTable)
+                ->where('vendor', $vendor)
+				->where('po_number', $po_number)
+                ->get();
+        return $query->result_array();
+    }
+	
+	public function updateStatus($vendor = NULL, $po_number = NULL, $rev = NULL) {
+        $this->db->set('status', 0);
+        if ($vendor !== NULL) {
+            $this->db->where('vendor', $vendor);
+        }
+        if ($po_number !== NULL) {
+            $this->db->where('po_number', $po_number);
+        }
+		if ($rev !== NULL) {
+            $this->db->where('rev', $rev);
+        }
+        $this->db->update($this->trackerTable);
+        return $this->db->affected_rows();
+    }
+
+    public function getOrderDetils($vendor = 0, $po_number = NULL) {
+        if ($vendor !== NULL) {
+            $this->db->where($this->orderTable . '.vendor', $vendor);
+        }
+        if ($po_number !== NULL) {
+            $this->db->where($this->orderTable . '.po_number', $po_number);
+        }
+        $this->db->select($this->orderTable . '.*')
+                ->from($this->orderTable);
+        $query = $this->db->get();
+        return $query->row_array();
+    }
+
+	function checkAndAssignNull($arr)
+	{
+		foreach ($arr as $key => $val) {
+			if(is_null($arr[$key]))
+			{
+				$arr[$key] = '';
+			}
+		}
+		return $arr;
+	}
+    function addTracker($region = 0, $market = 0, $vendor = 0, $po_number = '', $line = '', $po_date = '', $site_name = '', $description = '', $unit_price = 0, $amount = 0, $qty = '', $rev = 0, $supplier_no='',$orderArray,$gloablArray) {
+		#echo "<pre>";
+		#print_r($orderArray);exit;
+        //echo $supplier_no;
+        if ($amount == 0 || $unit_price == 0 || $unit_price == '0.00' || $unit_price == 0.00) {
+            $status = $this->trackerStatus['cancelled'];
+        } else {
+            $status = $this->trackerStatus['open'];
+        }
+		
+		$orderArray =  $this->checkAndAssignNull($orderArray);
+		$gloablArray =  $this->checkAndAssignNull($gloablArray);
+        //echo $po_date;
+        $po_date = date('Y-m-d',strtotime($po_date)); 
+        $sql = 'INSERT INTO ' . $this->db->dbprefix($this->trackerTable) . ' (region, market, vendor, po_number, line, po_line_rev, po_date, site_name,description, unit_price, amount, qty, rev, status, supplier_no,uco,delivery_date,fa_code,project_type,project_no,terms,part_no,created_by,order_date,revision_date,revised_by)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?,?,?,?,?,?)
+                        ON DUPLICATE KEY UPDATE 
+                        po_date=?,
+                        site_name=?,
+                        description=?, 
+                        unit_price=?, 
+                        amount=?,
+                        qty=?, 
+                        rev=?,
+                        status=?';
+        $this->db->query($sql, array($region, $market, $vendor, $po_number, $line, $po_number . $line, $po_date, $site_name, $description, $unit_price, $amount, $qty, $rev, $status, $supplier_no,$orderArray['uco'],$orderArray['delivery_date'],$gloablArray['fa_code'],$gloablArray['project_type'],$gloablArray['project_no'],$gloablArray['terms'],$gloablArray['part_no'],$gloablArray['created_by'],$gloablArray['order_date'],$gloablArray['revision_date'],$gloablArray['revised_by'],$po_date, $site_name, $description, $unit_price, $amount, $qty, $rev, $status));
+        #echo $this->db->last_query(); die();
+        return TRUE;
+    }
+
+    public function updareTracker($tracker_id = 0, $description = '', $unit_price = 0, $amount = 0, $qty = '', $region = 0, $vendor = 0, $market = 0, $po_date = '', $po_number = '', $line = '', $po_line_rev = '', $site_name = '') {
+        $this->db->set('unit_price', $unit_price);
+        $this->db->set('amount', $amount);
+        $this->db->set('qty', $qty);
+        
+        if ($amount == 0 || $unit_price == 0 || $unit_price == '0.00' || $unit_price == 0.00) {
+            $status = $this->trackerStatus['cancelled'];
+        } else {
+            $status = $this->trackerStatus['open'];
+        }
+
+        $this->db->set('region', $region);
+        $this->db->set('vendor', $vendor);
+        $this->db->set('market', $market);
+        $this->db->set('po_date', date('Y-m-d', $po_date));
+        $this->db->set('po_number', $po_number);
+        $this->db->set('line', $line);
+        $this->db->set('po_line_rev', $po_line_rev);
+        $this->db->set('site_name', $site_name);
+        
+        $this->db->set('status', $status);
+
+        $this->db->where('tracker_id', $tracker_id);
+        $this->db->update($this->trackerTable);
+        return $this->db->affected_rows();
+    }
+
+    public function getTrackerById($tracker_id = 0) {
+        $this->db->select($this->trackerTable . '.*')
+                ->from($this->trackerTable)
+                ->where('tracker_id', $tracker_id);
+        $query = $this->db->get();
+        return $query->row_array();
+    }
+
+    public function getAllTracker($limit = NULL, $offset = NULL, $vendor = 'All', $region = 'All', $market = 'All', $status = 'All', $po_number = '', $fromdate = '', $todate = '', $orderfield = NULL, $rodertype = 'desc') {
+        $this->db->select($this->trackerTable . '.*')
+                ->select($this->regionTable . '.name as region_name')
+                ->select($this->marketTable . '.name as market_name')
+                ->select($this->vendorTable . '.name as vendor_name')
+                ->from($this->trackerTable);
+        $this->db->join($this->regionTable, $this->trackerTable . '.region =' . $this->regionTable . '.id', 'left');
+        $this->db->join($this->marketTable, $this->trackerTable . '.market =' . $this->marketTable . '.id', 'left');
+        $this->db->join($this->vendorTable, $this->trackerTable . '.vendor =' . $this->vendorTable . '.id', 'left');
+        if ($orderfield != NULL) {
+            if ($orderfield == 'vendor') {
+                $this->db->order_by($this->vendorTable . '.name', $rodertype);
+            } else if ($orderfield == 'region') {
+                $this->db->order_by($this->regionTable . '.name', $rodertype);
+            } else if ($orderfield == 'market') {
+                $this->db->order_by($this->marketTable . '.name', $rodertype);
+            } else {
+                $this->db->order_by($this->trackerTable . '.' . $orderfield, $rodertype);
+            }
+        }
+
+        if ($vendor != 'All') {
+            $this->db->where('vendor', $vendor);
+        }
+        if ($status != 'All') {
+            $this->db->where_in('status', $status);
+        }
+
+        if ($region != 'All') {
+            $this->db->where('region', $region);
+        }
+
+        if ($market != 'All') {
+            $this->db->where('market', $market);
+        }
+
+        if (!empty($po_number)) {
+            $this->db->where('po_number', $po_number);
+        }
+
+        if (!empty($fromdate) && !empty($todate)) {
+            $this->db->where($this->db->dbprefix($this->trackerTable) . '.po_date  BETWEEN "' . date('Y-m-d', strtotime($fromdate)) . '" and "' . date('Y-m-d', strtotime($todate)) . '"');
+        }
+        if ($limit !== NULL && $offset !== NULL) {
+            $this->db->limit($limit, $offset);
+        }
+        $query = $this->db->get();
+        return $query->result_array();
+    }
+
+    public function gettrackerCount($vendor = 'All', $region = 'All', $market = 'All', $status = 'All', $po_number = '', $fromdate = '', $todate = '') {
+        $this->db->from($this->trackerTable);
+        if ($vendor != 'All') {
+            $this->db->where('vendor', $vendor);
+        }
+
+        if ($status != 'All') {
+            $this->db->where_in('status', $status);
+        }
+
+        if ($region != 'All') {
+            $this->db->where('region', $region);
+        }
+
+        if ($market != 'All') {
+            $this->db->where('market', $market);
+        }
+
+        if (!empty($po_number)) {
+            $this->db->where('po_number', $po_number);
+        }
+
+        if (!empty($fromdate) && !empty($todate)) {
+            $this->db->where($this->db->dbprefix($this->trackerTable) . '.po_date  BETWEEN "' . date('Y-m-d', strtotime($fromdate)) . '" and "' . date('Y-m-d', strtotime($todate)) . '"');
+        }
+        return $this->db->count_all_results();
+    }
+
+    public function changeTrackerStatus($tracker_id = 0, $status = 1) {
+        $data = array(
+            "status" => $status,
+        );
+        $this->db->where('tracker_id', $tracker_id);
+        $this->db->update($this->trackerTable, $data);
+        return $this->db->affected_rows();
+    }
+
+    public function changetoRIV($vendor = 0, $po_number = '', $line = 0) {
+        $data = array(
+            "status" => $this->trackerStatus['riv'],
+        );
+        $this->db->where('vendor', $vendor);
+        $this->db->where('po_number', $po_number);
+        $this->db->where('line', $line);
+        $this->db->where_not_in('status', array($this->trackerStatus['cancelled'], $this->trackerStatus['invoiced']));
+        $this->db->update($this->trackerTable, $data);
+        return $this->db->affected_rows();
+    }
+
+    public function getTrackersForInvoice($trackerArray) {
+        $query = $this->db->select('*')
+                ->from($this->trackerTable)
+                ->where_in('tracker_id', $trackerArray)
+                ->order_by('po_number, vendor')
+                ->get();
+        return $query->result_array();
+    }
+
+    public function changetoInvoice($tracker_id_array, $invoice_id = 0) {
+        $data = array(
+            "status" => $this->trackerStatus['invoiced'],
+            "invoice_id" => $invoice_id,
+        );
+        $this->db->where_in('tracker_id', $tracker_id_array);
+        $this->db->where('status', $this->trackerStatus['riv']);
+        $this->db->update($this->trackerTable, $data);
+        $error = $this->db->error();
+        if ($error['code'] == 0) {
+            return $this->db->affected_rows();
+        } else {
+            return 0;
+        }
+    }
+
+    public function chancelInvoice($tracker_id_array) {
+        $data = array(
+            "status" => $this->trackerStatus['open'],
+            "invoice_id" => 0,
+        );
+        $this->db->where_in('tracker_id', $tracker_id_array);
+        $this->db->where('status', $this->trackerStatus['invoiced']);
+        $this->db->update($this->trackerTable, $data);
+        $error = $this->db->error();
+        if ($error['code'] == 0) {
+            return $this->db->affected_rows();
+        } else {
+            return 0;
+        }
+    }
+
+    public function getTrackerByInvoice($invoice_id = 0) {
+        $query = $this->db->select('*')
+                ->from($this->trackerTable)
+                ->where('invoice_id', $invoice_id)
+                ->order_by('line')
+                ->get();
+        return $query->result_array();
+    }
+	
+	
+
+    public function getTrackerByVendor($vendor = 0, $fromdate = '', $todate = '', $groupBy = TRUE) {
+        $this->db->select('count(DISTINCT ' . $this->db->dbprefix($this->trackerTable) . '.po_number) as total_count', FALSE)
+                ->select_sum($this->trackerTable . '.amount')
+                ->select($this->trackerTable . '.region,' . $this->trackerTable . '.market')
+                ->select($this->regionTable . '.name as region_name')
+                ->select($this->marketTable . '.name as market_name')
+                ->select($this->vendorTable . '.name as vendor_name')
+                ->from($this->trackerTable);
+        $this->db->join($this->regionTable, $this->trackerTable . '.region =' . $this->regionTable . '.id', 'left');
+        $this->db->join($this->marketTable, $this->trackerTable . '.market =' . $this->marketTable . '.id', 'left');
+        $this->db->join($this->vendorTable, $this->trackerTable . '.vendor =' . $this->vendorTable . '.id', 'left');
+        $this->db->where_in($this->trackerTable . '.status', array($this->trackerStatus['open'], $this->trackerStatus['invoiced']));
+
+
+        $this->db->where('vendor', $vendor);
+
+        if (!empty($fromdate) && !empty($todate)) {
+            $this->db->where($this->db->dbprefix($this->trackerTable) . '.po_date  BETWEEN "' . date('Y-m-d', strtotime($fromdate)) . '" and "' . date('Y-m-d', strtotime($todate)) . '"');
+        }
+        if ($groupBy) {
+            $this->db->group_by(array($this->trackerTable . '.region', $this->trackerTable . '.market'));
+        }
+        $this->db->order_by($this->trackerTable . '.region', 'asc');
+
+        $query = $this->db->get();
+        return $query->result_array();
+    }
+
+    public function getTrackerDetails($tracker_id = NULL, $vendor = NULL, $market = NULL, $region = NULL) {
+        $this->db->select('*');
+        $this->db->from($this->trackerTable);
+        if ($tracker_id) {
+            $this->db->where('tracker_id', $tracker_id);
+            $query = $this->db->get();
+            return $query->row_array();
+        }
+        if ($vendor) {
+            $this->db->where('vendor', $vendor);
+        }
+        if ($market) {
+            $this->db->where('market', $market);
+        }
+        if ($region) {
+            $this->db->where('region', $region);
+        }
+        $query = $this->db->get();
+        return $query->result_array();
+    }
+    
+    function addTrackerError($region = 0, $market = 0, $vendor = 0, $po_number = '', $line = '', $po_date = '', $site_name = '', $description = '', $unit_price = 0, $amount = 0, $qty = '', $rev = 0, $supplier_no='') {
+        //echo $supplier_no;
+        if ($amount == 0 || $unit_price == 0 || $unit_price == '0.00' || $unit_price == 0.00) {
+            $status = $this->trackerStatus['cancelled'];
+        } else {
+            $status = $this->trackerStatus['open'];
+        }
+        $sql = 'INSERT INTO ' . $this->db->dbprefix($this->trackerErrorTable) . ' (region, market, vendor, po_number, line, po_line_rev, po_date, site_name,description, unit_price, amount, qty, rev, status, supplier_no)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+        $this->db->query($sql, array($region, $market, $vendor, $po_number, $line, $po_number . $line, $po_date, $site_name, $description, $unit_price, $amount, $qty, $rev, $status, $supplier_no));
+        //echo $this->db->last_query(); die();
+        return TRUE;
+    }
+
+}
